@@ -1,0 +1,13 @@
+Package: GrilldMap
+Title: A Map Of Grilld Hamburger Restaurants In Shiny
+Version: 0.0.0.9000
+Authors@R: person('Durand', 'Sinclair', email = 'durandsinclair@yahoo.com.au', role = c('cre', 'aut'))
+Description: A map that shows where Grilld restaurants are, and a heat map showing the distance to the nearest restaurant. Based on the tutorial at https://amitlevinson.com/blog/exploring-ice-cream-locations/.
+License: MIT + file LICENSE
+Imports: 
+    config,
+    golem,
+    shiny
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 6.1.1
