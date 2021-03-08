@@ -15,7 +15,27 @@
 
 ## Dependencies ----
 ## Add one line by package you want to add as dependency
-usethis::use_package( "thinkr" )
+
+#usethis::use_package("shiny")
+#usethis::use_package("shinyjs")
+#usethis::use_package("shinydashboard")
+#usethis::use_package("shinyWidgets")
+#usethis::use_package("leaflet")
+
+usethis::use_package( "here" )
+usethis::use_package("tidyverse")
+usethis::use_package("ggmap")
+usethis::use_package("rvest")
+
+usethis::use_package("htmltools")
+usethis::use_package("sf")
+usethis::use_package("ggspatial")
+usethis::use_package("ggrepel")
+usethis::use_package("reactable")
+usethis::use_package("ggtext")
+usethis::use_package("extrafont")
+usethis::use_package("patchwork")
+usethis::use_package("glue")
 
 ## Add modules ----
 ## Create a module infrastructure in R/

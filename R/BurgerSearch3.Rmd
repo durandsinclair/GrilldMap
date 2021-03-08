@@ -1,0 +1,666 @@
+---
+title: Where Is My Nearest Grill'd?
+author: Durand Sinclair
+date: '2021-02-27'
+slug: exploring-burger-restaurant-locations
+categories: [R]
+tags: [maps, rvest]
+subtitle: Maps and analysis to help Grill'd head office decide where to open their next franchise, without cannibalising existing stores.
+summary: 'Exploring maps and distances to various Grilld hamburger restaurant locations throughout Sydney'
+featured: yes
+image:
+  caption: ''
+  focal_point: ''
+  preview_only: yes
+projects: []
+draft: false
+editor_options: 
+  chunk_output_type: console
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{css, echo = FALSE}
+newcaption {
+  font-size: 0.9em;
+  text-align: center;
+}
+```
+
+<center><newcaption>
+<img width ="95%" src="../assets/img/grilld_burger.jpg"></img>
+
+Image: A hamburger, earlier, wondering where it should be sold  Source: [Grill'd website](https://www.grilld.com.au/restaurants/new-south-wales/sydney)</newcaption>
+</center><br>
+
+### Business Understanding
+
+Grill'd are a high-end hamburger restaurant that specialise in healthy burgers. They have grown from having [one restaurant in 2004](https://www.grilld.com.au/about) to [147](https://www.grilld.com.au/locations) restaurants by February 2021. That's around 35% per annum growth for 17 years. They achieved that by [selling franchises](https://www.grilld.com.au/own-a-grilld), which means their success has depended on being able to pick the right location for their next restaurant. 
+
+There are two challenges to this. First, do no harm to your existing stores. You don't want a new store to cannibalise existing sales. And second, out of all the places that won't cannibalise your stores, which is the place with the most people who'd want to eat your burgers? 
+
+We'll tackle the first problem today. Let's make a map showing head office where *not* to open a new store. 
+
+```{r prepare, warning=FALSE, message = FALSE, echo = FALSE}
+# 0) PREPARE ENVIRONMENT --------------------------------------------------
+
+    # Load libraries
+    library(tidyverse)
+    library(leaflet)
+    
+    library(htmltools)
+    library(sf)
+    library(ggspatial)
+    library(ggrepel)
+    library(reactable)
+    library(ggtext)
+    library(extrafont)
+    library(patchwork)
+    library(glue)
+    library(Rfast)
+
+# 1) GET DATA -------------------------------------------------------------
+    locations_tbl <- read_csv(here::here("data", "processed", "locations_tbl.csv"))
+    locations <- read_csv(here::here("data", "processed", "locations.csv"))
+    locations_plus_one <- read_csv(here::here("data", "processed", "locations_plus_one.csv"))
+```
+
+
+### Data Understanding
+
+First, let's find out where the existing restaurants are. 
+
+I scraped Sydney restaurant locations from the Grill'd website, and then geocoded it, which involves asking Google Cloud to figure out the latitude and longitude for the locations provided. The script for that can be found [here](). 
+
+Here's a table of the Sydney restaurants. 
+``` {r table, echo = FALSE}
+reactable(locations_tbl, defaultPageSize = 5)
+```
+
+There are 19 stores in Sydney. Let's put them on a map. 
+(Hover your mouse over a restaurant to see its address and phone number.)
+
+``` {r plotfirst, echo=FALSE, message = FALSE, warning = FALSE}
+# 2) VISUALISE DATA ------
+
+    # Label design (Pop up label on map)
+    make_label <- function(restaurant_name, address_1, address_2, phone){
+        glue("
+        <p style='text-align:right;font-family:Calibri;font-size:12px;'>
+        <b>{restaurant_name}</b>
+        </br>{address_1}<br/>
+        </br>{address_2}<br/>
+        <span style='color:#808080;'>{phone}</p>
+        ") %>% 
+            HTML()
+    }
+
+    # Label data
+    burger_labels <- pmap(
+        # Data
+        .l = list(locations$name, 
+             locations$address1,
+             locations$address2,
+             locations$phone
+             ),
+        
+        # Function to apply data to
+        .f = make_label
+    )
+    
+    # Icon design (Grill'd "Love" logo)
+    burger_icon <-  makeIcon(
+      "https://www.grilld.com.au/images/logo-grilld-love.svg",
+      iconWidth = 24, 
+      iconHeight = 24
+    )
+
+    # Create map
+    leaflet(data = locations) %>%
+        addTiles() %>%
+        addMarkers(data = locations, 
+                   icon = burger_icon, 
+                   label = ~ burger_labels) 
+
+
+```  
+
+From a quick scan, we can see that most restaurants are located around the CBD, although there are a few others scattered across the suburbs.
+
+### How To Measure Geographic Distances
+
+To colour-code the map according to distance from existing stores, we have to measure distance from existing stores to various other points on the map. So we're going to need to do two things:
+
+1) Cut Our Map Into Squares - Doing that will allow us to measure the distance from the middle of each square to each of our restaurants.  
+
+2) Change Co-ordinate Reference Systems - When measuring the distance between two points in an area as large as Sydney, the measurements get thrown off because of the curvature of the Earth. Geographers get around this by using clever maths to flatten the map at that location to make the measurement, in the same way that you might want to flatten a basketball to measure the distance between two points on it with a ruler.
+
+### Analysis
+
+Let's start with a simple outline of Greater Sydney. 
+``` {r plotsyd, echo=FALSE, message=FALSE, warning=FALSE}
+  # POINTS
+
+    # Convert the locations in WGS Co-ordinate reference system
+    burger_locations_wgs <- locations %>%
+        st_as_sf(coords = c("lon", "lat"), crs = 4326)
+    
+    # Also convert to the metric system
+    burger_locations_flat <- st_transform(burger_locations_wgs, 
+                                          crs = 32755)
+    
+  # SHAPES
+  
+    # Get a map of Sydney 
+    
+    # WGS84 projection - whole Earth
+    syd_map_wgs <- st_transform(
+        st_read(
+            here::here("data", "interim", "GCCSA_2016_AUST.shp"),
+            quiet = TRUE
+        ), 
+        crs = 4326,
+        coords = c("lon", "lat")
+    ) %>%
+        filter(GCC_NAME16 == "Greater Sydney")
+
+    # Local projection - As flat as we can make Sydney
+    syd_map_flat <- st_transform(
+        st_read(
+            here::here("data", "interim", "GCCSA_2016_AUST.shp"),
+            quiet = TRUE
+        ), 
+        crs = 32755,
+        coords = c("lon", "lat")
+    ) %>% filter(GCC_NAME16 == "Greater Sydney")
+
+leaflet() %>%
+  addTiles() %>%
+  addPolygons(data = syd_map_wgs$geometry)
+
+```  
+
+Now let's cut it into small squares of 2km on each side:
+```{r plotgrid, echo=FALSE, message=FALSE, warning=FALSE}
+  # GRID MAPS
+    
+    # Load the above objects as rds for faster rendering
+    grid_map_flat <- readRDS(
+        here::here(
+            "data",
+            "processed",
+            "grid_map_flat.rds"
+        )
+    )
+
+    grid_map_wgs <- readRDS(
+        here::here(
+            "data",
+            "processed",
+            "grid_map_wgs.rds"
+            )
+        )
+    
+  # VISUALISE
+    
+    p1 <- ggplot(syd_map_wgs) + 
+        geom_sf()
+    
+    p2 <- ggplot(grid_map_wgs) + 
+        geom_sf()
+    
+    p1 +
+       p2 +
+       theme_void() +
+       theme(plot.title = element_text(color = "#0C0C44",
+                                       face = "bold")
+             ) +
+       plot_annotation(
+           title = "Map of Sydney (left) and the same map cut into 2km<sup>2</sup> areas (right)",
+          theme = theme(plot.title = element_markdown(size = 12))
+       )
+
+    #print("Whoops! The map is still uncommented!")
+```  
+
+We can now measure the distance from the centre of each grid square to the nearest restaurant.
+
+For example, let's take one random grid square somewhere in Sydney, say, in the south-west ...
+``` {r preponesquare, echo = FALSE, warning = FALSE, message = FALSE}
+# FIRST CHUNK
+    # Convert the locations in WGS Co-ordinate reference system
+    burger_locations_wgs_extra <- locations_plus_one %>%
+        st_as_sf(coords = c("lon", "lat"), crs = 4326)
+    
+    # Also convert to the metric system
+    burger_locations_flat_extra <- st_transform(
+      burger_locations_wgs, 
+      crs = 32755
+    )
+    
+  # SHAPES
+  
+    # Get a map of Sydney 
+    
+    # WGS84 projection - whole Earth
+    # syd_map_wgs <- st_transform(
+    #     st_read(
+    #         here::here("data", "interim", "GCCSA_2016_AUST.shp"),
+    #         quiet = TRUE
+    #     ), 
+    #     crs = 4326,
+    #     coords = c("lon", "lat")
+    # ) %>%
+    #     filter(GCC_NAME16 == "Greater Sydney")
+    # 
+    # # Local projection - As flat as we can make Sydney
+    # syd_map_flat <- st_transform(
+    #     st_read(
+    #         here::here("data", "interim", "GCCSA_2016_AUST.shp"),
+    #         quiet = TRUE
+    #     ), 
+    #     crs = 32755,
+    #     coords = c("lon", "lat")
+    # ) %>% filter(GCC_NAME16 == "Greater Sydney")
+
+# SECOND CHUNK
+    # Commented out for speed next time
+    # my_grids <- st_make_grid(syd_map_flat, cellsize = 2000)
+    # grid_map_flat <- st_intersection(my_grids, syd_map_flat)
+    # grid_map_wgs <- st_transform(grid_map_flat, crs = 4326)
+    # saveRDS(object = grid_map_flat, file = here::here("data", "processed", "grid_map_flat.rds"))
+    # saveRDS(object = grid_map_wgs, file = here::here("data", "processed", "grid_map_wgs.rds"))
+
+  # GRID MAPS
+    
+    # Load the above objects as rds for faster rendering
+    # grid_map_flat <- readRDS(
+    #     here::here(
+    #         "data",
+    #         "processed",
+    #         "grid_map_flat.rds"
+    #     )
+    # )
+    # 
+    # grid_map_wgs <- readRDS(
+    #     here::here(
+    #         "data",
+    #         "processed",
+    #         "grid_map_wgs.rds"
+    #         )
+    #     )
+
+# PRESENT CHUNK
+# Create a sample dataframe
+distance_data_wgs_extra <- data.frame(
+  restaurant_location = st_geometry(burger_locations_wgs_extra),
+  my_square = st_centroid(rep(grid_map_wgs[830,], 20)) 
+) %>%
+  rename(restaurant = geometry,
+         my_square = geometry.1
+         )
+
+# -----------
+# Our data points projected to Sydney's CRS (32755)
+distance_data_flat_extra <- map_dfc(distance_data_wgs_extra, 
+                              ~ st_transform(.x, crs=32755))
+
+# Our centroid, projected to Sydney's CRS (32755)
+sample_data <- distance_data_flat_extra %>%
+  
+  # Convert back to WGS (CRS 4326)
+  map_dfc(~ st_transform(.x, crs = 4326) %>% st_coordinates(.x) ) %>%
+  map_dfc(as.data.frame) %>%
+
+  # Rename the coordinates
+  set_names(c("restaurant_x", 
+                "restaurant_y", 
+                "my_square_x", 
+                "my_square_y")) %>%
+
+  # Add the distances
+  cbind(distance = map2_dbl(distance_data_flat_extra$restaurant,
+                            distance_data_flat_extra$my_square,
+                            st_distance),
+        location_polygon = st_transform(distance_data_flat_extra$restaurant,
+                                          crs = 4326)) %>%
+
+    # Figure out which restaurant is closest
+  mutate(Key = ifelse(distance==min(distance), 
+                      "Random Square", 
+                      "Restaurants")) %>%
+  mutate(Restaurants = case_when(
+    distance == min(distance) ~ "Random Square",
+    distance == Rfast::nth(x = distance, 
+                           k = 2, 
+                           descending = FALSE) ~ "Closest Restaurant",
+    TRUE ~ "Other Restaurants"
+  )) %>%
+  # mutate(Restaurants = ifelse(distance == min(distance),
+  #                               "Random Square",
+  #                               ifelse(Rfast::nth(x = distance,
+  #                                                      k = 2,
+  #                                                      descending = FALSE),
+  #                                      "Closest Restaurant", 
+  #                                      "Other Restaurants"))) %>%
+  mutate(distance = ifelse(Key == "Random Square",
+                             paste0(round(distance/1000, 0), "km"),
+                             round(distance/1000, 0)
+                             ))
+  # mutate(distance = paste0(round(distance/1000,0), "km"))         
+
+# POINT LABELS
+  # This is where we'll put our labels, on the side.
+  # The first item is the X and Y coordinates for My Square.
+  # The second item is the grid with the shortest distance
+  # The third item is the one with the longest distance.
+#sample_data
+point_labels <- data.frame(x = c(150.6975, 150.7977, 150.6939),
+                           y = c(-33.9757, -34.07338, -33.75169),
+                           label = c("Random Square",
+                                     "Closest Restaurant",
+                                     "Other")
+)
+
+# VISUALISE 
+# Show distances from a point to various restaurants
+point_label_1 <- data.frame(x = c(150.6975),
+                            y = c(-33.9757),
+                            label = c("Random Square"))
+
+point_label_2 <- data.frame(x = c(150.6975, 150.7977),
+                            y = c(-33.9757, -34.07338),
+                            label = c("Random Square", "Closest Restaurant"))
+
+# ------
+ggplot(syd_map_wgs) +
+    geom_sf() +
+    
+    theme_void() + 
+    
+    # Plot grid square we want to measure from. ("my_square")
+    #geom_sf(data = grid_map_wgs[830,],
+    #        aes(geometry = geometry),
+    #        fill = "#196432",
+    #        color = "#196432",
+    #        size = 1
+    #) +
+    plot_annotation(
+        title = "Sydney, with one random 2km<sup>2</sup> area highlighted",
+        theme = theme(plot.title = element_markdown(size = 12))
+        ) +
+  
+    # Add grey labels for "Example Grid" 
+    geom_text_repel(data = point_label_1, 
+                   mapping = aes(x = x, y = y, label = label), 
+                   xlim = c(150, 150.5), # Position of label
+                   point.padding = 0.1, 
+                   arrow = arrow(length =unit(0.015, "npc"),
+                                 type = "closed"),
+                   segment.linetype = 8, 
+                   color = "gray55",
+                   segment.color = "gray80", 
+                   size = 3) +
+      # Plot grid square we want to measure from. ("my_square")
+    geom_sf(data = grid_map_wgs[830,],
+            aes(geometry = geometry),
+            fill = "#196432",
+            color = "#196432",
+            size = 1
+    ) 
+
+# ------
+```  
+
+How far away is that square from all the Grill'd restaurants? Let's add them to the map. 
+``` {r plotrestaurants, inlcude=TRUE, echo=FALSE, warning=FALSE, message=FALSE} 
+
+# Show distances from a point to various restaurants
+g <- ggplot(syd_map_wgs) +
+    geom_sf(show.legend = FALSE) +
+
+    #Plot restaurants as points
+    geom_point(data = sample_data,
+              mapping = aes(x = restaurant_x,
+                            y = restaurant_y,
+                            #color = "red"
+                            color = `Key`
+                            ),
+              show.legend = TRUE,
+              size = 1.2) +
+    
+    theme_void() +
+  
+    # Plot grid square we want to measure from.
+    geom_sf(data = grid_map_wgs[830,],
+            aes(geometry = geometry),
+            fill = "#196432",
+            color = "#196432",
+            size = 1,
+            show.legend = FALSE
+    ) 
+g + 
+      # Add grey labels  
+    #geom_text_repel(data = point_label_2, 
+    #                mapping = aes(x = x, y = y, label = label), 
+    #                xlim = c(150, 150.5),
+    #                point.padding = 0.1, 
+    #                arrow = arrow(length =unit(0.015, "npc"),
+    #                              type = "closed"),
+    #                segment.linetype = 8, 
+    #                color = "gray55",
+    #                segment.color = "gray80", 
+    #                size = 3) +
+      plot_annotation(
+        # title = "Sydney, with one random 2km<sup>2</sup> area highlighted, and the restaurants shown",
+        theme = theme(plot.title = element_markdown(size = 12))
+      ) + 
+  
+      # Plot grid square we want to measure from. 
+    geom_sf(data = grid_map_wgs[830,],
+            aes(geometry = geometry),
+            fill = "#196432",
+            color = "#196432",
+            size = 1,
+            show.legend = FALSE
+    ) +
+  scale_color_manual(values = c("#196432", "red"))
+```  
+
+Now we can measure the distance between our random grid square and each restaurant. This will allow us to find the nearest restaurant to our random square. 
+``` {r plotdistances, echo=FALSE, warning=FALSE, message=FALSE}
+# DISTANCE FROM STORE ----
+g <- ggplot(syd_map_wgs) +
+  geom_sf(show.legend = FALSE) +
+
+  #Plot restaurants as points
+  geom_point(data = sample_data[1:19,],
+             mapping = aes(x = restaurant_x,
+                           y = restaurant_y,
+                           color = Restaurants
+                           ),
+             show.legend = TRUE,
+             size = 1.2) +
+  
+  # Colours of points
+  scale_color_manual(values = c("Random Square" = "#196432",
+                                "Closest Restaurant" = "red", 
+                                "Other Restaurants" = "gray60"
+                                )
+                     ) +
+  
+  # Remove x and y scales
+  theme_void() +
+  
+  # Draw lines from grid square to restaurant
+  geom_spatial_segment(data = sample_data[1:20,], 
+                       mapping = aes(x = my_square_x, 
+                                     xend = restaurant_x, 
+                                     y = my_square_y, 
+                                     yend = restaurant_y, 
+                                     linetype = Restaurants, 
+                                     color = Restaurants
+                                     ), 
+                       show.legend = FALSE,
+                       crs = 4326) +
+  
+  # WARNING: Makes Key weird
+  
+  # Add labels showing distance from restaurant to starting location
+  geom_spatial_text_repel(data = sample_data[c(6, 10, 14, 15), ],
+                          mapping = aes(
+                            x = restaurant_x,
+                            y = restaurant_y,
+                            label = distance,
+                            color = Restaurants
+                            ),
+                          crs = 4326,
+                          size = 4
+                          # hjust = 0.5,
+                          # size = 3.5
+                          ) +
+  
+  # Heading
+  plot_annotation(
+    title = paste0("Distances from random 2km<sup>2</sup>", 
+                   " square to Grill'd restaurants, in km"),
+    theme = theme(plot.title = element_markdown(size = 12))
+  ) + 
+        
+  # Plot Green Random Square  
+  geom_sf(data = grid_map_wgs[830,],
+          aes(geometry = geometry),
+          fill = "#196432",
+          color = "#196432",
+          size = 1.5
+          ) + 
+  
+  # Other
+  xlim(150, 152) + 
+  coord_sf(clip = "off") +
+  theme(plot.title = element_text(size = 13, hjust = 0.5))
+
+# PLOT
+g
+```  
+
+If we can do that for one grid square, we can do that for *all* grid squares. This gives us a heat map.
+
+Click anywhere in the map to find out how far away that square is from the nearest Grill'd restaurant.
+``` {r plotheatmap, include=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+# WHERE'S MY BURGER -------------
+    
+    # Create a dataframe where each column is a grid location
+    #   and each row is a restaurant, and each cell is a distance between
+    #   the two
+    distances <- st_distance(burger_locations_flat,
+                             st_centroid(grid_map_flat)) %>%
+        as_tibble()
+    
+    burger_distances <- data.frame(
+        
+        # We want grids in a WGS 84 CRS:
+        #grid_map_wgs = st_transform(grid_map_flat, crs = 4326),
+        grid_map_wgs, 
+        
+        # Extract minimum distance for each grid
+        distance_km = map_dbl(distances, min) / 1000,
+        
+        # Extract the value's index for joining with the burger location 
+        location_id = map_dbl(distances, 
+                              function(x) match(min(x), x)
+                              )
+    ) %>%
+        
+        # Join with the burger table
+        left_join(burger_locations_wgs, by = c("location_id" = "id"))
+
+# Bin ranges for a nice colour scale
+  bins <- c(0, 5, 15, 30, 50, 700)
+  
+# Binned colour palette
+  pal <- colorBin(c("#FF1554", 
+                    "#FF3C70", 
+                    "#FF7096", 
+                    "#FFA4BC",
+                    "#FFE5EC"),
+                  domain = burger_distances$distance_km, 
+                  bins = bins, 
+                  reverse = TRUE
+                  )
+  
+# Make labels for heat map
+make_label_distances <- function(km, address1, address2){
+    glue("
+  <div style='text-align:left;'>
+  You are <span style='font-size:13px;'><b>{round(km, 1)}</b></span> 
+  km from the nearest location at:</div>
+  <div style='text-align:right;'>
+       {address1}, {address2}</div>"
+         ) %>% 
+        HTML()
+  }
+
+burger_labels <- pmap(list(burger_distances$distance_km,
+                           burger_distances$address1,
+                           burger_distances$address2), 
+                      make_label_distances)
+
+# Add icon
+burger_icon <-  makeIcon("https://www.grilld.com.au/images/logo-grilld-love.svg",
+                         iconWidth = 18, 
+                         iconHeight = 18
+)
+
+full_map <- leaflet() %>% 
+    addTiles() %>% 
+    addMarkers(data = burger_locations_wgs, 
+               icon = ~burger_icon, 
+               group = "Burger locations") %>% 
+    addPolygons(data = burger_distances[[1]], 
+                fillColor = pal(burger_distances$distance_km), 
+                fillOpacity = 0.8, 
+                weight = 0, 
+                opacity = 1, 
+                color = "transparent",
+                group = "Distances", 
+                popup = burger_labels, 
+                highlight = highlightOptions(weight = 2.5, 
+                                             color = "#666", 
+                                             bringToFront = TRUE, 
+                                             opacity = 1),
+                popupOptions = popupOptions(autoPan = FALSE,
+                                            closeOnClick = TRUE, 
+                                            textOnly = T)
+                ) %>% 
+    addLegend(pal = pal, 
+              values = (burger_distances$distance_km), 
+              opacity = 0.8, 
+              title = "Distance (Km)", 
+              position= "bottomright"
+              ) %>% 
+    addLayersControl(overlayGroups = c("Burger locations", "Distances"),
+                     options = layersControlOptions(collapsed = FALSE))
+
+# Save as a widget for faster loading later
+full_map
+```
+
+### Conclusion
+
+The map can show you at a glance which suburbs are close to a Grill'd (lighter squares), and which suburbs are missing out (darker pink squares). For instance, Liverpool is missing out. So is Hornsby. But Chatswood is not. In principle, we don't want to open a store in Artarmon as it would cannibalise sales from the store in Chatswood next door. 
+
+
+### Next Steps
+
+There are a couple of directions this project could go next.
+
+First, now that we've figured out where the next restaurant *shouldn't* go, we could figure out where it *should* go. This is a problem of prediction. It could be reframed to "What are the most important locational factors which predict restaurant success?" And once it's put like that, it becomes a classic data science problem. All we have to do now is collect data and find out what things predict success. Sites like the ABS and CoreLogic have tens of thousands of datapoints available about each suburb to help us understand not only which factors are important, but how important they are. We just need to mash that up with past sales data to train a time series model on.
+
+Second, we could tweak the size of the circles. Right now, they're set at 5km intervals, which is an arbitrary number. But do sales really start to get cannibalised when the restaurants are 5km from each other, or is it some other number? We could figure this out by looking at whether our standard model becomes less good at predicting sales as restaurants get closer to each other. But again, we'd need sales data.
+
+And that's for another day.
